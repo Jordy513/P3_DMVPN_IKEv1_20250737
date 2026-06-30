@@ -55,6 +55,9 @@ A diferencia del modelo Hub-and-Spoke clásico — donde cada par Hub-Spoke requ
 
 * **mGRE (Multipoint GRE):** Extensión de GRE que permite que una sola interfaz de túnel tenga múltiples destinos simultáneos. El Hub usa `tunnel mode gre multipoint` en lugar de declarar un `tunnel destination` fijo — esto es lo que permite que un solo Tunnel0 en el Hub sirva a N Spokes sin crear N interfaces.
 * **NHRP (Next Hop Resolution Protocol):** Protocolo que resuelve la dirección IP pública real (NBMA) de un peer a partir de su dirección IP dentro del túnel. Los Spokes se registran ante el Hub (que actúa como NHS — Next Hop Server) anunciando su IP del túnel y su IP pública. Cuando un Spoke necesita alcanzar a otro Spoke, consulta vía NHRP al Hub para obtener su IP pública y así construir un túnel directo.
+
+  > **Requisito crítico para que NHRP se dispare:** el protocolo de enrutamiento del Hub debe anunciar el next-hop **original** de cada Spoke (no reemplazarlo por sí mismo). EIGRP hace "next-hop-self" por defecto en cualquier interfaz — si no se desactiva con `no ip next-hop-self eigrp 1` en el Tunnel0 del Hub, todos los Spokes ven al Hub como next-hop para cualquier ruta remota, el tráfico de datos siempre viaja por el Hub, y la resolución NHRP entre Spokes nunca se dispara — el túnel se comporta como Fase 1 aunque la interfaz sea mGRE.
+
 * **IPSec (en este laboratorio, con IKEv1):** Protege el tráfico de la nube mGRE con cifrado, integridad y autenticación. Se aplica mediante `tunnel protection ipsec profile` sobre la interfaz Tunnel0 — igual que en el laboratorio de GRE over IPSec, pero ahora en modo multipunto.
 
 ### 2.3 Las Fases de DMVPN
@@ -230,8 +233,16 @@ interface Tunnel0
 ! no ip split-horizon es OBLIGATORIO en el Hub: sin esto,
 ! las rutas aprendidas de un Spoke no se reenvían a otro
 ! Spoke por la misma interfaz (regla normal de split-horizon).
+!
+! no ip next-hop-self es IGUAL DE OBLIGATORIO en Fase 2:
+! sin esto, EIGRP reemplaza el next-hop real de cada Spoke
+! por la IP del propio Hub al anunciar la ruta a los demás
+! Spokes. Si eso pasa, el tráfico SIEMPRE viaja por el Hub
+! (comportamiento de Fase 1) y NHRP nunca se dispara, porque
+! los Spokes nunca ven el next-hop real del otro Spoke.
 interface Tunnel0
  no ip split-horizon eigrp 1
+ no ip next-hop-self eigrp 1
 
 router eigrp 1
  network 20.25.37.0 0.0.0.63       ! LAN local del Hub
@@ -463,7 +474,11 @@ R2# show ip nhrp
 
 > La segunda entrada — `10.25.37.3` (IP **de túnel** de R3) resuelta hacia `192.168.1.30` (IP **pública/NBMA** de R3) — aparece **solo después** de generar tráfico hacia Spoke2. Tiene `Type: dynamic` y sí expira (`expire 01:59:55`). Esta es la prueba de que NHRP resolvió la IP pública de R3 dinámicamente y se construyó el túnel directo Spoke-to-Spoke, sin pasar por el Hub.
 >
-> Si tu output solo muestra la primera entrada (estática hacia el Hub), significa que aún no se ha generado tráfico entre las LANs de los Spokes — ejecuta el ping de la sección 5.6 y vuelve a correr el comando.
+> Si tu output solo muestra la primera entrada (estática hacia el Hub) **incluso después de hacer ping hacia la LAN del otro Spoke**, revisa lo siguiente antes de seguir:
+>
+> 1. Corre `show ip route eigrp` en el Spoke y mira el next-hop de la ruta hacia la LAN remota. Si dice `via 10.25.37.1` (la IP del Hub) en vez de `via 10.25.37.3` (la IP real del otro Spoke), el problema es que falta `no ip next-hop-self eigrp 1` en el `Tunnel0` del Hub — sin ese comando, EIGRP oculta el next-hop real de cada Spoke y el tráfico de datos nunca sale del camino Hub-Spoke, por lo que NHRP nunca se dispara.
+> 2. Confirma con `show ip eigrp neighbors` que el Spoke sí tiene adyacencia con el Hub.
+> 3. Una vez corregido el next-hop-self en el Hub, vuelve a correr el ping y el `show ip nhrp` — la entrada dinámica debería aparecer en segundos.
 
 ---
 
