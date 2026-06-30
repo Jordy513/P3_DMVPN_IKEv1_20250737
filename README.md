@@ -116,20 +116,20 @@ La topología consta de un Hub (R1) y dos Spokes (R2 y R3), todos conectados a u
           │  10.25.37.1   │  NHRP │  10.25.37.2   │       │  10.25.37.3   │
           └───────┬───────┘       └───────┬───────┘       └───────┬───────┘
                   │                       ║                       ║
-                  │     ╚═════════════════════════════════════════╝
-                  │              Túnel Spoke-Spoke directo        │
-                  │          (negociado dinámicamente vía NHRP)   │
-                  │ e0/1: 20.25.37.1/26   │ e0/1: 20.25.37.65/26  │ e0/1: 20.25.37.129/26
+                  │            ╚═══════════════════════════════════╝
+                  │              Túnel Spoke-Spoke directo
+                  │              (negociado dinámicamente vía NHRP)
+                  │ e0/1: 20.25.37.1/26  │ e0/1: 20.25.37.65/26  │ e0/1: 20.25.37.129/26
                   │                       │                       │
           ┌───────┴───────┐       ┌───────┴───────┐       ┌───────┴───────┐
           │      SW1      │       │      SW2      │       │      SW3      │
           └───────┬───────┘       └───────┬───────┘       └───────┬───────┘
                   │                       │                       │
-              ┌───┴──┐                ┌───┴──┐                ┌───┴──┐
-              │ PC1  │                │ PC2  │                │ PC3  │
-              │  .2  │                │ .66  │                │ .130 │
-              └──────┘                └──────┘                └──────┘
-           20.25.37.0/26           20.25.37.64/26          20.25.37.128/26
+              ┌───┴──┐               ┌───┴──┐                ┌───┴──┐
+              │ PC1  │               │ PC2  │                │ PC3  │
+              │  .2  │               │ .66  │                │ .130 │
+              └──────┘               └──────┘                └──────┘
+           20.25.37.0/26          20.25.37.64/26          20.25.37.128/26
 
   ════════════════════════════════════════════════════════════════════════
   Flujo DMVPN Fase 2 — comunicación Spoke-to-Spoke directa:
@@ -431,24 +431,28 @@ Type:Hub, NHRP Peers:2,
 
 ### 5.2 Verificar la caché NHRP en un Spoke
 
+> **Aclaración de direcciones:** `show ip nhrp` solo resuelve direcciones **dentro del espacio del túnel** (`10.25.37.0/24`). La columna `NBMA address` muestra la IP pública/WAN real (`192.168.1.0/24`) asociada a esa IP de túnel. Las LANs (`20.25.37.x`) **nunca aparecen aquí** — esas rutas las aprende EIGRP por separado (sección 5.5), no NHRP.
+
 ```cisco
 R2# show ip nhrp
 ```
 
-*Salida esperada antes de comunicación Spoke-Spoke (solo conoce al Hub):*
+*Salida esperada antes de comunicación Spoke-Spoke (solo conoce al Hub — entrada estática):*
 
 ```
 10.25.37.1/32 via 10.25.37.1
-   Tunnel0 created 00:03:10, expire 01:56:49
+   Tunnel0 created 00:03:49, never expire
    Type: static, Flags: used
    NBMA address: 192.168.1.10
 ```
 
-*Salida esperada después de hacer ping hacia el otro Spoke (PC2 → PC3):*
+> `Type: static` y `never expire` son correctos aquí — esta entrada la creó manualmente el comando `ip nhrp map 10.25.37.1 192.168.1.10` en la configuración de R2, por lo que no caduca.
+
+*Salida esperada después de hacer ping hacia el otro Spoke (PC2 → PC3) — aparece una segunda entrada dinámica:*
 
 ```
 10.25.37.1/32 via 10.25.37.1
-   Tunnel0 created 00:03:10, expire 01:56:49
+   Tunnel0 created 00:03:49, never expire
    Type: static, Flags: used
    NBMA address: 192.168.1.10
 10.25.37.3/32 via 10.25.37.3
@@ -457,7 +461,9 @@ R2# show ip nhrp
    NBMA address: 192.168.1.30
 ```
 
-> La segunda entrada (`10.25.37.3` con `Type: dynamic`) aparece **después** de generar tráfico hacia el Spoke2 — es la prueba de que NHRP resolvió dinámicamente la IP pública de R3 y se construyó el túnel directo.
+> La segunda entrada — `10.25.37.3` (IP **de túnel** de R3) resuelta hacia `192.168.1.30` (IP **pública/NBMA** de R3) — aparece **solo después** de generar tráfico hacia Spoke2. Tiene `Type: dynamic` y sí expira (`expire 01:59:55`). Esta es la prueba de que NHRP resolvió la IP pública de R3 dinámicamente y se construyó el túnel directo Spoke-to-Spoke, sin pasar por el Hub.
+>
+> Si tu output solo muestra la primera entrada (estática hacia el Hub), significa que aún no se ha generado tráfico entre las LANs de los Spokes — ejecuta el ping de la sección 5.6 y vuelve a correr el comando.
 
 ---
 
