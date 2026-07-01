@@ -623,9 +623,9 @@ Este laboratorio usa IKEv1 por requerimiento del curso, pero en producción se r
 
 ## 8. Video Demostrativo
 
-🎥 **[Ver demostración en YouTube](#)**
+🎥 **[Ver demostración en YouTube]([#](https://youtu.be/n4JQ1k3DX7Q))**
 
-**Duración:** máximo 8 minutos
+**Duración:** 6:49
 
 **Contenido del video:**
 
