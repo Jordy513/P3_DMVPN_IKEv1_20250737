@@ -1,0 +1,200 @@
+! ══════════════════════════════════════════════════════
+! R1 — HUB | DMVPN Fase 2 con IKEv1
+! Jordy Rosario — 20250737 | Seguridad de Redes 2026-C-2
+! ══════════════════════════════════════════════════════
+
+hostname R1
+
+! ─── Interfaces físicas ────────────────────────────────
+interface Ethernet0/0
+ description WAN-hacia-NET
+ ip address 192.168.1.10 255.255.255.0
+ no shutdown
+
+interface Ethernet0/1
+ description LAN-HUB
+ ip address 20.25.37.1 255.255.255.192
+ no shutdown
+
+! ─── PASO 1: ISAKMP Policy — IKE Fase 1 ───────────────
+crypto isakmp policy 10
+ encryption aes 256
+ hash sha256
+ authentication pre-share
+ group 14
+ lifetime 86400
+
+! ─── PASO 2: PSK válida para CUALQUIER Spoke ──────────
+! En DMVPN se usa una wildcard PSK (0.0.0.0) porque el
+! Hub no conoce de antemano las IPs de todos los Spokes.
+crypto isakmp key DmvpnITLA2026! address 0.0.0.0 0.0.0.0
+
+! ─── PASO 3: Transform Set en modo TRANSPORTE ─────────
+crypto ipsec transform-set TS_DMVPN esp-aes 256 esp-sha256-hmac
+ mode transport
+
+! ─── PASO 4: IPSec Profile ─────────────────────────────
+crypto ipsec profile DMVPN_PROFILE
+ set transform-set TS_DMVPN
+
+! ─── PASO 5: Interfaz mGRE del Hub ─────────────────────
+interface Tunnel0
+ description DMVPN-HUB-Fase2
+ ip address 10.25.37.1 255.255.255.0
+ ip mtu 1400
+ ip tcp adjust-mss 1360
+ tunnel source Ethernet0/0
+ tunnel mode gre multipoint        ! mGRE — sin destination fijo
+ tunnel key 20250737                ! Identificador del túnel (matrícula)
+ ip nhrp network-id 1
+ ip nhrp authentication dmvpnkey
+ ip nhrp map multicast dynamic      ! Acepta registros dinámicos de Spokes
+ tunnel protection ipsec profile DMVPN_PROFILE
+ no shutdown
+
+! ─── PASO 6: EIGRP sobre la nube DMVPN ─────────────────
+! no ip split-horizon es OBLIGATORIO en el Hub: sin esto,
+! las rutas aprendidas de un Spoke no se reenvían a otro
+! Spoke por la misma interfaz (regla normal de split-horizon).
+!
+! no ip next-hop-self es IGUAL DE OBLIGATORIO en Fase 2:
+! sin esto, EIGRP reemplaza el next-hop real de cada Spoke
+! por la IP del propio Hub al anunciar la ruta a los demás
+! Spokes. Si eso pasa, el tráfico SIEMPRE viaja por el Hub
+! (comportamiento de Fase 1) y NHRP nunca se dispara, porque
+! los Spokes nunca ven el next-hop real del otro Spoke.
+interface Tunnel0
+ no ip split-horizon eigrp 1
+ no ip next-hop-self eigrp 1
+
+router eigrp 1
+ network 20.25.37.0 0.0.0.63       ! LAN local del Hub
+ network 10.25.37.0 0.0.0.255      ! Subred de la nube DMVPN
+ no auto-summary
+
+------------------------------------------------------------------------------------------------------------------------------------------
+
+! ══════════════════════════════════════════════════════
+! R2 — SPOKE 1 | DMVPN Fase 2 con IKEv1
+! Jordy Rosario — 20250737 | Seguridad de Redes 2026-C-2
+! ══════════════════════════════════════════════════════
+
+hostname R2
+
+! ─── Interfaces físicas ────────────────────────────────
+interface Ethernet0/0
+ description WAN-hacia-NET
+ ip address 192.168.1.20 255.255.255.0
+ no shutdown
+
+interface Ethernet0/1
+ description LAN-Spoke1
+ ip address 20.25.37.65 255.255.255.192
+ no shutdown
+
+! ─── PASO 1: ISAKMP Policy — IKE Fase 1 ───────────────
+crypto isakmp policy 10
+ encryption aes 256
+ hash sha256
+ authentication pre-share
+ group 14
+ lifetime 86400
+
+! ─── PASO 2: PSK — apunta específicamente al Hub ──────
+crypto isakmp key DmvpnITLA2026! address 192.168.1.10
+
+! ─── PASO 3: Transform Set en modo TRANSPORTE ─────────
+crypto ipsec transform-set TS_DMVPN esp-aes 256 esp-sha256-hmac
+ mode transport
+
+! ─── PASO 4: IPSec Profile ─────────────────────────────
+crypto ipsec profile DMVPN_PROFILE
+ set transform-set TS_DMVPN
+
+! ─── PASO 5: Interfaz mGRE del Spoke ───────────────────
+! Igual que en el Hub, el Spoke también usa mGRE en
+! Fase 2 — esto es lo que habilita la comunicación
+! Spoke-to-Spoke directa.
+interface Tunnel0
+ description DMVPN-Spoke1-Fase2
+ ip address 10.25.37.2 255.255.255.0
+ ip mtu 1400
+ ip tcp adjust-mss 1360
+ tunnel source Ethernet0/0
+ tunnel mode gre multipoint
+ tunnel key 20250737
+ ip nhrp network-id 1
+ ip nhrp authentication dmvpnkey
+ ip nhrp nhs 10.25.37.1                    ! Dirección del Hub en el túnel
+ ip nhrp map 10.25.37.1 192.168.1.10       ! Mapeo estático: IP-túnel del Hub -> IP pública
+ ip nhrp map multicast 192.168.1.10        ! Para tráfico multicast (EIGRP) hacia el Hub
+ tunnel protection ipsec profile DMVPN_PROFILE
+ no shutdown
+
+! ─── PASO 6: EIGRP sobre la nube DMVPN ─────────────────
+router eigrp 1
+ network 20.25.37.64 0.0.0.63      ! LAN local de Spoke 1
+ network 10.25.37.0 0.0.0.255      ! Subred de la nube DMVPN
+ no auto-summary
+
+-----------------------------------------------------------------------------------------------------------------------------------
+
+! ══════════════════════════════════════════════════════
+! R3 — SPOKE 2 | DMVPN Fase 2 con IKEv1
+! Jordy Rosario — 20250737 | Seguridad de Redes 2026-C-2
+! ══════════════════════════════════════════════════════
+
+hostname R3
+
+! ─── Interfaces físicas ────────────────────────────────
+interface Ethernet0/0
+ description WAN-hacia-NET
+ ip address 192.168.1.30 255.255.255.0
+ no shutdown
+
+interface Ethernet0/1
+ description LAN-Spoke2
+ ip address 20.25.37.129 255.255.255.192
+ no shutdown
+
+! ─── PASO 1: ISAKMP Policy — IKE Fase 1 ───────────────
+crypto isakmp policy 10
+ encryption aes 256
+ hash sha256
+ authentication pre-share
+ group 14
+ lifetime 86400
+
+! ─── PASO 2: PSK — apunta específicamente al Hub ──────
+crypto isakmp key DmvpnITLA2026! address 192.168.1.10
+
+! ─── PASO 3: Transform Set en modo TRANSPORTE ─────────
+crypto ipsec transform-set TS_DMVPN esp-aes 256 esp-sha256-hmac
+ mode transport
+
+! ─── PASO 4: IPSec Profile ─────────────────────────────
+crypto ipsec profile DMVPN_PROFILE
+ set transform-set TS_DMVPN
+
+! ─── PASO 5: Interfaz mGRE del Spoke ───────────────────
+interface Tunnel0
+ description DMVPN-Spoke2-Fase2
+ ip address 10.25.37.3 255.255.255.0
+ ip mtu 1400
+ ip tcp adjust-mss 1360
+ tunnel source Ethernet0/0
+ tunnel mode gre multipoint
+ tunnel key 20250737
+ ip nhrp network-id 1
+ ip nhrp authentication dmvpnkey
+ ip nhrp nhs 10.25.37.1
+ ip nhrp map 10.25.37.1 192.168.1.10
+ ip nhrp map multicast 192.168.1.10
+ tunnel protection ipsec profile DMVPN_PROFILE
+ no shutdown
+
+! ─── PASO 6: EIGRP sobre la nube DMVPN ─────────────────
+router eigrp 1
+ network 20.25.37.128 0.0.0.63     ! LAN local de Spoke 2
+ network 10.25.37.0 0.0.0.255      ! Subred de la nube DMVPN
+ no auto-summary
